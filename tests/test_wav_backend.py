@@ -120,3 +120,38 @@ PLAY_SEQUENCE quiet
         samples = renderer._synthesize()
         # Pure rest should produce all zeros
         assert all(s == 0 for s in samples)
+
+
+class TestSampleRateParam:
+    """Lower sample rates render the same duration with fewer frames."""
+
+    def _render(self, rate):
+        import io, wave
+        from dsl.parser import parse
+        from dsl.wav_backend import WavRenderer
+        src = "BPM 120\nINSTRUMENT s:\n    TYPE SYNTH\n    WAVE SIN\nSEQUENCE q:\n    PLAY s C4 1\nPLAY_SEQUENCE q\n"
+        data = WavRenderer(parse(src), sample_rate=rate).render_bytes()
+        return wave.open(io.BytesIO(data))
+
+    def test_default_rate_is_44100(self) -> None:
+        assert self._render(44100).getframerate() == 44100
+
+    def test_preview_rate_22050(self) -> None:
+        w = self._render(22050)
+        assert w.getframerate() == 22050
+
+    def test_duration_independent_of_rate(self) -> None:
+        full = self._render(44100)
+        half = self._render(22050)
+        d_full = full.getnframes() / full.getframerate()
+        d_half = half.getnframes() / half.getframerate()
+        assert abs(d_full - d_half) < 0.01
+
+    def test_progress_callback_monotonic(self) -> None:
+        from dsl.parser import parse
+        from dsl.wav_backend import WavRenderer
+        src = "BPM 120\nINSTRUMENT s:\n    TYPE SYNTH\n    WAVE SIN\nSEQUENCE q:\n    PLAY s C4 1\n    PLAY s E4 1\nPLAY_SEQUENCE q\n"
+        ticks = []
+        WavRenderer(parse(src)).render_bytes(progress_cb=ticks.append)
+        assert ticks == sorted(ticks)
+        assert ticks[-1] == 1.0
