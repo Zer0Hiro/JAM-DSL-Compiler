@@ -149,7 +149,7 @@ def validate(program: Program) -> ValidationResult:
         if inst.glide_ms > 1000:
             result.warn(f"Instrument '{name}': glide {inst.glide_ms}ms is very slow")
         if inst.kind == InstrumentKind.DRUM and inst.glide_ms > 0:
-            result.warn(f"Instrument '{name}': glide on a drum instrument may sound unexpected")
+            result.warn(f"Instrument '{name}': GLIDE has no effect on drum instruments")
         if inst.pan < 0 or inst.pan > 255:
             result.error(f"Instrument '{name}': pan {inst.pan} out of range 0-255")
         if inst.wave == WaveType.PLUCK and inst.kind == InstrumentKind.DRUM:
@@ -324,9 +324,7 @@ def validate(program: Program) -> ValidationResult:
 
     # --- Check sequences for VelocityCurve ---
     for seq_name, seq in program.sequences.items():
-        remaining_plays = sum(1 for ev in seq.events if isinstance(ev, PlayNote))
-        play_idx = 0
-        for ev in seq.events:
+        for ev_idx, ev in enumerate(seq.events):
             if isinstance(ev, VelocityCurve):
                 if ev.kind not in ("CRESCENDO", "DECRESCENDO", "OFF"):
                     result.error(
@@ -350,7 +348,7 @@ def validate(program: Program) -> ValidationResult:
                             ev.line,
                         )
                     plays_after = sum(
-                        1 for e in seq.events[seq.events.index(ev) + 1:]
+                        1 for e in seq.events[ev_idx + 1:]
                         if isinstance(e, PlayNote)
                     )
                     if ev.note_count > plays_after:
@@ -568,7 +566,7 @@ def _check_key_notes(program: Program, result: ValidationResult) -> None:
     scale = program.config.key_scale
     root_pc = _NOTE_BASES.get(root_name[0].upper(), 0)
     if len(root_name) > 1:
-        if root_name[1] == "#":
+        if root_name[1] in ("#", "s", "S"):
             root_pc += 1
         elif root_name[1] == "b":
             root_pc -= 1

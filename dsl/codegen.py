@@ -125,6 +125,8 @@ class FlatEvent:
     is_volume_change: bool = False
     new_volume: int = 0
     cutoff_override: int = 0  # 0 = no override; non-zero = Hz value for this note
+    is_fade: bool = False
+    fade_in: bool = False  # True = fade in, False = fade out (when is_fade)
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +195,9 @@ class CodeGenerator:
         # Flatten arrangement into a linear event list
         self._events: list[FlatEvent] = []
         self._flatten_arrangement(program.arrangement)
+
+        # Fade support machinery only emitted when a fade is present
+        self._has_fade = any(ev.is_fade for ev in self._events)
 
     def _create_voice_channels(self, program: Program) -> None:
         """Scan for chords and create clone instrument channels for extra voices."""
@@ -266,6 +271,10 @@ class CodeGenerator:
 
     # ----- flatten arrangement -----------------------------------------------
 
+    def _delay_buf_size(self, inst: InstrumentDef) -> int:
+        """Delay buffer length in samples, capped to fit a uint16_t index."""
+        return min(65535, max(1, inst.delay_time_ms * self.config.audio_rate // 1000))
+
     def _beats_to_ms(self, beats: float) -> int:
         """Convert beats to milliseconds using the configured BPM.
 
@@ -321,7 +330,18 @@ class CodeGenerator:
                     is_rest=True, is_volume_change=True, new_volume=item.volume,
                 ))
             elif isinstance(item, (FadeIn, FadeOut)):
-                pass  # TODO: implement fade in codegen
+                self._events.append(self._make_fade_event(item))
+
+    def _make_fade_event(self, item: FadeIn | FadeOut) -> FlatEvent:
+        """Build a fade control event (channel 252, freq = duration in ms)."""
+        dur_ms = min(65535, self._beats_to_ms(item.duration_beats))
+        fade_in = isinstance(item, FadeIn)
+        # velocity field doubles as fade direction in the C struct: 1=in, 0=out
+        return FlatEvent(
+            channel=252, freq=dur_ms, duration_ms=0,
+            is_rest=True, is_fade=True, fade_in=fade_in,
+            velocity=1 if fade_in else 0,
+        )
 
     def _flatten_sequence(self, name: str) -> None:
         """Flatten a named sequence into events."""
@@ -502,7 +522,7 @@ class CodeGenerator:
         abs_events: list[tuple[int, FlatEvent]] = []
         t = 0
         for ev in events:
-            if ev.is_bpm_change or ev.is_volume_change:
+            if ev.is_bpm_change or ev.is_volume_change or ev.is_fade:
                 abs_events.append((t, ev))
             elif ev.is_rest:
                 if not ev.simultaneous_with_next:
@@ -543,7 +563,7 @@ class CodeGenerator:
                     is_rest=True, is_volume_change=True, new_volume=child.volume,
                 ))
             elif isinstance(child, (FadeIn, FadeOut)):
-                pass  # TODO: implement fade in codegen
+                self._events.append(self._make_fade_event(child))
             child_events = self._events[saved:]
             self._events = self._events[:saved]
             child_timelines.append(child_events)
@@ -578,8 +598,8 @@ class CodeGenerator:
                         channel=0, freq=0, duration_ms=rest_gap, is_rest=True,
                     ))
 
-            control_evs = [ev for ev in group if ev.is_bpm_change or ev.is_volume_change]
-            note_evs = [ev for ev in group if not ev.is_bpm_change and not ev.is_volume_change]
+            control_evs = [ev for ev in group if ev.is_bpm_change or ev.is_volume_change or ev.is_fade]
+            note_evs = [ev for ev in group if not ev.is_bpm_change and not ev.is_volume_change and not ev.is_fade]
 
             for cev in control_evs:
                 self._events.append(cev)
@@ -632,7 +652,7 @@ class CodeGenerator:
             "// ============================================================\n"
             "// Auto-generated Mozzi 2.0 sketch\n"
             "// Produced by Mozzi DSL Compiler v0.1.0\n"
-            "// Target: Arduino Uno (ATmega328P)\n"
+            "// Target: ESP32 (primary) / Arduino Uno (ATmega328P)\n"
             "// ============================================================\n"
         )
 
@@ -830,7 +850,7 @@ class CodeGenerator:
             lines.append("// Delay effect state")
             for i, inst in enumerate(self._instruments):
                 if inst.delay_time_ms > 0:
-                    buf_size = max(1, inst.delay_time_ms * self.config.audio_rate // 1000)
+                    buf_size = self._delay_buf_size(inst)
                     lines.append(f"int8_t delayBuf{i}[{buf_size}];")
                     lines.append(f"uint16_t delayPos{i} = 0;")
             lines.append("")
@@ -881,6 +901,9 @@ class CodeGenerator:
                     comment = f"  // BPM -> {ev.new_bpm}"
                 elif ev.is_volume_change:
                     comment = f"  // VOLUME -> {ev.new_volume}"
+                elif ev.is_fade:
+                    direction = "FADE_IN" if ev.fade_in else "FADE_OUT"
+                    comment = f"  // {direction} over {ev.freq}ms"
                 elif ev.is_rest:
                     comment = f"  // rest {ev.duration_ms}ms"
                 elif ev.note_name:
@@ -912,12 +935,31 @@ class CodeGenerator:
 
     def _emit_sequencer_state(self) -> str:
         """Emit sequencer state variables."""
+        fade_state = ""
+        if self._has_fade:
+            fade_state = (
+                "\n"
+                "// ----- Fade state -----\n"
+                "bool fadeActive = false;\n"
+                "unsigned long fadeStartTime = 0;\n"
+                "uint32_t fadeDurationMs = 1;\n"
+                "uint8_t fadeFrom = 255;\n"
+                "uint8_t fadeTo = 255;\n"
+                "uint8_t fadeVol = 255;\n"
+            )
         return (
             "// ----- Hardware pins -----\n"
+            "#ifdef __AVR__\n"
+            "#define BTN_PLAY  2\n"
+            "#define BTN_RESTART 3\n"
+            "#define POT_VOL   A0\n"
+            "#define POT_FREQ  A1\n"
+            "#else\n"
             "#define BTN_PLAY  18\n"
             "#define BTN_RESTART 19\n"
             "#define POT_VOL   32\n"
             "#define POT_FREQ  34\n"
+            "#endif\n"
             "\n"
             "// ----- Button state -----\n"
             "bool playing = false;\n"
@@ -933,6 +975,7 @@ class CodeGenerator:
             "uint16_t groupStart = 0;\n"
             "unsigned long eventStartTime = 0;\n"
             "bool eventTriggered = false;\n"
+            + fade_state +
             "\n"
             "// Per-channel note-off tracking (independent of sequencer advance)\n"
             f"unsigned long channelNoteOff[{max(1, len(self._instruments))}];\n"
@@ -1029,6 +1072,19 @@ class CodeGenerator:
         lines.append("")
         return "\n".join(lines)
 
+    def _glide_on(self, i: int) -> bool:
+        """True when channel *i* should get glide handling in generated code.
+
+        Drums are excluded: tonal drums have their own pitch sweep and the
+        glide branch would leave its `else {` unclosed in the emitted C++.
+        """
+        inst = self._instruments[i]
+        return (
+            self._has_glide
+            and inst.glide_ms > 0
+            and inst.kind != InstrumentKind.DRUM
+        )
+
     def _emit_trigger_helpers(self) -> str:
         """Emit triggerNoteOn/triggerNoteOff helper functions."""
         n = len(self._instruments)
@@ -1059,7 +1115,7 @@ class CodeGenerator:
                         "    bellH3_0.setFreq((int)(freq * 3));",
                         "    bellNoteOnTime0 = mozziMicros();",
                     ]
-                elif self._has_glide and self._instruments[0].glide_ms > 0:
+                elif self._glide_on(0):
                     lines += [
                         "    if (channelActive[0] && glideMs[0] > 0) {",
                         "        targetFreq[0] = freq;",
@@ -1075,7 +1131,7 @@ class CodeGenerator:
                         ]
                     else:
                         lines.append("    osc0.setFreq((int)freq);")
-                        if self._has_glide and self._instruments[0].glide_ms > 0:
+                        if self._glide_on(0):
                             lines += [
                                 "        curGlideFreq[0] = freq;",
                                 "    }",
@@ -1100,7 +1156,7 @@ class CodeGenerator:
                         lines.append(f"        bellH3_{i}.setFreq((int)(freq * 3));")
                         lines.append(f"        bellNoteOnTime{i} = mozziMicros();")
                     else:
-                        if self._has_glide and self._instruments[i].glide_ms > 0:
+                        if self._glide_on(i):
                             lines.append(f"        if (channelActive[{i}] && glideMs[{i}] > 0) {{")
                             lines.append(f"            targetFreq[{i}] = freq;")
                             lines.append(f"            glideSteps[{i}] = (uint16_t)((unsigned long)glideMs[{i}] * MOZZI_CONTROL_RATE / 1000);")
@@ -1111,7 +1167,7 @@ class CodeGenerator:
                             lines.append(f"        osc{i}.setFreq((int)chanFreq[{i}]);")
                         else:
                             lines.append(f"        osc{i}.setFreq((int)freq);")
-                        if self._has_glide and self._instruments[i].glide_ms > 0:
+                        if self._glide_on(i):
                             lines.append(f"            curGlideFreq[{i}] = freq;")
                             lines.append(f"        }}")
                     lines.append(f"        env{i}.noteOn(true);")
@@ -1196,9 +1252,13 @@ class CodeGenerator:
 
         lines = [
             "void updateControl() {",
-            "    // Read volume pot (GPIO 32)",
+            "    // Read volume pot",
             "    int potRaw = mozziAnalogRead(POT_VOL);",
+            "#ifdef __AVR__",
+            "    masterVol = (potRaw < 10) ? 255 : map(potRaw, 0, 1023, 0, 255);",
+            "#else",
             "    masterVol = (potRaw < 10) ? 255 : map(potRaw, 0, 4095, 0, 255);",
+            "#endif",
             "",
             "    // BTN_PLAY (GPIO 18) — toggle play/stop",
             "    bool btn1 = digitalRead(BTN_PLAY);",
@@ -1251,7 +1311,7 @@ class CodeGenerator:
         if self._has_glide:
             lines.append("    // Glide (portamento)")
             for i in range(n):
-                if self._instruments[i].glide_ms > 0 and not self._drum_tonal[i]:
+                if self._glide_on(i):
                     lines.append(f"    if (channelActive[{i}] && glideSteps[{i}] > 0) {{")
                     lines.append(f"        if (curGlideFreq[{i}] < targetFreq[{i}]) {{")
                     lines.append(f"            curGlideFreq[{i}] += (targetFreq[{i}] - curGlideFreq[{i}]) / glideSteps[{i}];")
@@ -1321,6 +1381,22 @@ class CodeGenerator:
             "",
             "    unsigned long now = mozziMicros();",
             "",
+            *(
+                [
+                    "    // Fade volume ramp",
+                    "    if (fadeActive) {",
+                    "        unsigned long fadeElapsedMs = (now - fadeStartTime) / 1000UL;",
+                    "        if (fadeElapsedMs >= fadeDurationMs) {",
+                    "            fadeVol = fadeTo;",
+                    "            fadeActive = false;",
+                    "        } else {",
+                    "            fadeVol = (uint8_t)(fadeFrom + ((int32_t)fadeTo - (int32_t)fadeFrom) * (int32_t)fadeElapsedMs / (int32_t)fadeDurationMs);",
+                    "        }",
+                    "    }",
+                    "",
+                ]
+                if self._has_fade else []
+            ),
             "    // Per-channel note-off (independent of sequencer advance)",
             f"    for (uint8_t ch = 0; ch < {max(1, len(self._instruments))}; ch++) {{",
             "        if (channelActive[ch] && now >= channelNoteOff[ch]) {",
@@ -1358,11 +1434,26 @@ class CodeGenerator:
             "            if (ev.channel == 253 && ev.isRest) {",
             "                masterVol = (uint8_t)ev.freq;",
             "            }",
+            *(
+                [
+                    "            // Fade: channel 252, freq = duration ms, velocity = direction",
+                    "            if (ev.channel == 252 && ev.isRest) {",
+                    "                fadeActive = true;",
+                    "                fadeStartTime = now;",
+                    "                fadeDurationMs = (ev.freq > 0) ? (uint32_t)ev.freq : 1;",
+                    "                if (ev.velocity) { fadeFrom = 0; fadeTo = 255; fadeVol = 0; }",
+                    "                else { fadeFrom = fadeVol; fadeTo = 0; }",
+                    "            }",
+                ]
+                if self._has_fade else []
+            ),
             "            if (!ev.simNext) break;",
             "            currentEvent++;",
             "        } while (currentEvent < NUM_EVENTS);",
             "",
             "        eventTriggered = true;",
+            "        // Guard: last event in table may carry simNext",
+            "        if (currentEvent >= NUM_EVENTS) currentEvent = NUM_EVENTS - 1;",
             "        // Sequencer advance is based on the last event in the group",
             "        ev = readEvent(currentEvent);",
             "        durationUs = (unsigned long)ev.duration * 1000UL;",
@@ -1457,13 +1548,14 @@ class CodeGenerator:
 
             # Delay runs even when channel inactive so tails ring out
             if has_delay_i:
-                buf_size = max(1, inst.delay_time_ms * self.config.audio_rate // 1000)
+                buf_size = self._delay_buf_size(inst)
                 fb = inst.delay_feedback
                 lines.append(f"    {{ // Delay ch{i}")
                 lines.append(f"        int8_t dly{i} = delayBuf{i}[delayPos{i}];")
-                lines.append(f"        int16_t wet{i} = s{i} + ((int16_t)dly{i} * {fb}) / 255;")
+                lines.append(f"        int16_t wet{i} = s{i} + (((int16_t)dly{i} * {fb}) >> 8);")
                 lines.append(f"        delayBuf{i}[delayPos{i}] = (int8_t)(wet{i} > 127 ? 127 : (wet{i} < -128 ? -128 : wet{i}));")
-                lines.append(f"        delayPos{i} = (delayPos{i} + 1) % {buf_size};")
+                lines.append(f"        delayPos{i}++;")
+                lines.append(f"        if (delayPos{i} >= {buf_size}) delayPos{i} = 0;")
                 lines.append(f"        s{i} = wet{i};")
                 lines.append(f"    }}")
 
@@ -1496,6 +1588,13 @@ class CodeGenerator:
             lines += [
                 "    sampleL = (sampleL * (int16_t)masterVol) >> 8;",
                 "    sampleR = (sampleR * (int16_t)masterVol) >> 8;",
+                *(
+                    [
+                        "    sampleL = (sampleL * (int16_t)fadeVol) >> 8;",
+                        "    sampleR = (sampleR * (int16_t)fadeVol) >> 8;",
+                    ]
+                    if self._has_fade else []
+                ),
                 "",
                 "    if (sampleL > 127) sampleL = 127;",
                 "    if (sampleL < -128) sampleL = -128;",
@@ -1510,6 +1609,10 @@ class CodeGenerator:
             lines += [
                 "    // Apply master volume from pot",
                 "    sample = (sample * (int16_t)masterVol) >> 8;",
+                *(
+                    ["    sample = (sample * (int16_t)fadeVol) >> 8;"]
+                    if self._has_fade else []
+                ),
                 "",
                 "    // Clamp to 8-bit signed range",
                 "    if (sample > 127) sample = 127;",

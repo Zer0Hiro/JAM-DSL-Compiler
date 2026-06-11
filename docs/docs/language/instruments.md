@@ -41,7 +41,7 @@ INSTRUMENT kick:
 | `RESONANCE` | no | `0`–`255` (default: `0`) | Filter resonance / Q factor |
 | `REVERB` | no | `0`–`255` (default: `0`) `[DECAY ms] [ROOM 0.0–1.0]` | Reverb wet/dry mix, with optional decay time and room size |
 | `DELAY` | no | `time_ms feedback` (0–2000, 0–255) | Echo delay time and feedback |
-| `GLIDE` | no | `0`–`1000` ms (default: `0`) | Portamento / pitch slide time |
+| `GLIDE` | no | `0`–`1000` ms (default: `0`) | Portamento / pitch slide time. SYNTH only — ignored on DRUM instruments (warning) |
 | `PAN` | no | `0`–`255` (default: `127`) | Stereo pan (0=left, 127=center, 255=right) |
 | `LFO` | no | `rate depth VOLUME\|PITCH\|CUTOFF\|PAN` | Low Frequency Oscillator |
 | `VOICES` | no | `1`–`4` (default: `1`) | Number of detuned oscillator voices (unison) |

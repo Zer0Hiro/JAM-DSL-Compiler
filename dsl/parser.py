@@ -165,7 +165,7 @@ class Parser:
             if tok.type == TokenType.KEYWORD:
                 kw = tok.value
                 if kw in ("BPM", "AUDIO_RATE", "CONTROL_RATE"):
-                    if program.arrangement and kw in ("BPM", "VOLUME"):
+                    if program.arrangement and kw == "BPM":
                         item = self._parse_arrangement_item()
                         program.arrangement.append(item)
                     else:
@@ -193,9 +193,34 @@ class Parser:
             else:
                 raise ParseError(f"Unexpected token {tok.value!r} at top level", tok)
 
+        # TIME_SIGNATURE may appear after a PATTERN block; apply the final
+        # value to every pattern so declaration order doesn't matter.
+        for pat in program.patterns.values():
+            pat.beats_per_bar = program.config.time_sig_beats
+
         return program
 
     # ----- config ------------------------------------------------------------
+
+    @staticmethod
+    def _normalize_key_root(root: str, tok: Token) -> str:
+        """Normalize a KEY root name to '<LETTER>' or '<LETTER>#'/'<LETTER>b'.
+
+        Accepts case-insensitive letter and accidental ('#', 's' for sharp,
+        'b' for flat).  Preserves the flat 'b' in lowercase so later
+        pitch-class math can distinguish it from the note letter B.
+        """
+        letter = root[0].upper()
+        if letter not in "ABCDEFG":
+            raise ParseError(f"Invalid KEY root {root!r}", tok)
+        accidental = root[1:]
+        if accidental in ("", None):
+            return letter
+        if accidental in ("#", "s", "S"):
+            return letter + "#"
+        if accidental in ("b", "B"):
+            return letter + "b"
+        raise ParseError(f"Invalid KEY root {root!r}", tok)
 
     def _parse_config(self, config: Config) -> None:
         """Parse a config line like ``BPM 120`` or ``KEY C MAJOR``."""
@@ -214,9 +239,10 @@ class Parser:
             elif root_tok.type == TokenType.KEYWORD:
                 root = self._advance().value
             elif root_tok.type == TokenType.IDENT:
-                root = self._advance().value.upper()
+                root = self._advance().value
             else:
                 raise ParseError(f"Expected note root after KEY, got {root_tok.value!r}", root_tok)
+            root = self._normalize_key_root(root, root_tok)
             scale_tok = self._expect(TokenType.KEYWORD)
             if scale_tok.value not in self._SCALE_MAP:
                 raise ParseError(f"Unknown scale type: {scale_tok.value!r}", scale_tok)

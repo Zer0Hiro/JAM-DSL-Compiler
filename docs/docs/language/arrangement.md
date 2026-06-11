@@ -30,7 +30,7 @@ LOOP 4:
     PLAY_PATTERN drums
 ```
 
-Repeats the indented body N times. Loops can contain `PLAY_SEQUENCE`, `PLAY_PATTERN`, `PLAY_TOGETHER`, and nested `LOOP` blocks.
+Repeats the indented body N times. N must be a positive integer (>= 1). Loops can contain `PLAY_SEQUENCE`, `PLAY_PATTERN`, `PLAY_TOGETHER`, and nested `LOOP` blocks.
 
 ```
 LOOP 2:

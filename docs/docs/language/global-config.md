@@ -35,6 +35,8 @@ Lock your composition to a musical scale with `KEY`. Notes outside the declared 
 ```
 KEY C4 MAJOR          # C major scale
 KEY A3 MINOR          # A natural minor
+KEY Bb MINOR          # flats work: Bb, Eb — octave is optional
+KEY F# DORIAN         # sharps work: F# or Fs
 KEY D4 PENTATONIC     # D pentatonic
 KEY E4 BLUES          # E blues scale
 ```
@@ -45,7 +47,7 @@ KEY E4 BLUES          # E blues scale
 KEY <root_note> <scale_type>
 ```
 
-- **root_note** — any note (C4, D#3, etc.). The octave sets the reference; the pitch class defines the key.
+- **root_note** — note letter with optional accidental and optional octave: `C`, `C4`, `F#`, `Fs`, `Bb`, `D#3` all work (case-insensitive; `s` = sharp, `b` = flat). Only the pitch class matters — the octave, if given, is ignored. An invalid root (e.g. `H`) is a compile error.
 - **scale_type** — one of: `MAJOR`, `MINOR`, `DORIAN`, `PHRYGIAN`, `LYDIAN`, `MIXOLYDIAN`, `PENTATONIC`, `BLUES`
 
 ### Available Scales
@@ -86,4 +88,6 @@ Default is `4 4` (four quarter-note beats per bar). When set, the compiler valid
 
 :::note
 If no `TIME_SIGNATURE` is set and a `BEAT` position > 4 is used, the compiler issues a warning (assuming 4/4 time).
+
+`TIME_SIGNATURE` can appear anywhere in the file — it applies to every `PATTERN` regardless of declaration order.
 :::

@@ -45,6 +45,7 @@ def compile_file(
     verbose: bool = False,
     dry_run: bool = False,
     wav_mode: bool = False,
+    audio_pin: Optional[int] = None,
 ) -> bool:
     """Compile a .jam file to a Mozzi 2.0 C++ sketch or WAV preview.
 
@@ -54,6 +55,7 @@ def compile_file(
         verbose: If True, print the AST and diagnostics.
         dry_run: If True, parse and validate but skip code generation.
         wav_mode: If True, render to WAV instead of C++.
+        audio_pin: Optional GPIO pin for PWM/I2S audio output (C++ mode).
 
     Returns:
         True if compilation succeeded, False if there were errors.
@@ -108,20 +110,25 @@ def compile_file(
     if wav_mode:
         return _generate_wav(program, source_path, output_path, verbose)
     else:
-        return _generate_cpp(program, output_path)
+        return _generate_cpp(program, output_path, audio_pin)
 
 
-def _generate_cpp(program: Program, output_path: Optional[str]) -> bool:
+def _generate_cpp(
+    program: Program,
+    output_path: Optional[str],
+    audio_pin: Optional[int] = None,
+) -> bool:
     """Generate Mozzi C++ output.
 
     Args:
         program: Validated Program AST.
         output_path: Output file path, or None for stdout.
+        audio_pin: Optional GPIO pin for audio output.
 
     Returns:
         True on success.
     """
-    cpp_code = generate(program)
+    cpp_code = generate(program, audio_pin=audio_pin)
 
     if output_path:
         out = Path(output_path)
@@ -231,6 +238,12 @@ def main() -> None:
         action="store_true",
         help="Parse and validate only — do not generate output.",
     )
+    parser.add_argument(
+        "--pin",
+        type=int,
+        default=None,
+        help="GPIO pin for audio output (C++ mode; 25/26 = ESP32 I2S DAC, other = PWM).",
+    )
 
     args = parser.parse_args()
     ok = compile_file(
@@ -239,6 +252,7 @@ def main() -> None:
         verbose=args.verbose,
         dry_run=args.dry_run,
         wav_mode=args.wav,
+        audio_pin=args.pin,
     )
     sys.exit(0 if ok else 1)
 

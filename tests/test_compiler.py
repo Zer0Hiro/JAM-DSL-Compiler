@@ -7,7 +7,7 @@ from dsl.codegen import generate
 from dsl.semantic import validate
 
 
-EXAMPLES_DIR = Path(__file__).parent.parent / "dsl_examples"
+EXAMPLES_DIR = Path(__file__).parent.parent / "examples"
 
 
 def _compile_example(name: str) -> str:

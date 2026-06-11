@@ -317,7 +317,7 @@ class LoopBlock:
     """A LOOP N: ... block in the arrangement.
 
     Attributes:
-        count: Number of repetitions (0 = infinite).
+        count: Number of repetitions (must be >= 1).
         body: List of arrangement items.
         line: Source line number.
     """

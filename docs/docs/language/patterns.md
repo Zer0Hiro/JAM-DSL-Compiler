@@ -30,7 +30,7 @@ BEAT <position>: <instrument> [C4 E4 G4] [duration] [velocity] [CUTOFF:<value>] 
 - **instrument** — must match a defined `INSTRUMENT`
 - **note** — optional pitch for synth instruments in patterns
 - **duration** — optional, in beats
-- **velocity** — optional, `0`–`255`. Per-hit volume scaling
+- **velocity** — optional, `0`–`255`. Per-hit volume scaling. **Requires duration to be written first** — the first bare number after the note is always read as duration, so `BEAT 1: kick 100` means a 100-beat duration, not velocity 100. Write `BEAT 1: kick 0.25 100` instead
 - **CUTOFF:value** / **REVERB:value** / **DELAY:time:feedback** — optional per-note effect overrides (same as PLAY)
 - Default bar length: 4 beats (4/4 time). Set `TIME_SIGNATURE` to change (see [Global Config](global-config.md#time-signature))
 

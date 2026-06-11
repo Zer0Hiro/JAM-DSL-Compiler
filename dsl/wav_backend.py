@@ -382,8 +382,12 @@ class WavRenderer:
         # Build volume scaling (0.0..1.0) per instrument
         self._volumes: list[float] = [inst.volume / 255.0 for inst in self._instruments]
 
-        # Stereo mode
-        self._is_stereo = any(inst.pan != 127 for inst in self._instruments)
+        # Stereo mode (LFO PAN itself isn't modulated in the preview, but
+        # channels using it should still render in stereo like the hardware)
+        self._is_stereo = any(
+            inst.pan != 127 or inst.lfo_pan is not None
+            for inst in self._instruments
+        )
         self._pans: list[float] = [(inst.pan - 127) / 128.0 for inst in self._instruments]
 
         # Current BPM (mutable for dynamic automation)
@@ -686,7 +690,7 @@ class WavRenderer:
         abs_events: list[tuple[float, WavEvent]] = []
         t = 0.0
         for ev in events:
-            if ev.is_volume_change:
+            if ev.is_volume_change or ev.is_fade:
                 abs_events.append((t, ev))
             elif ev.is_rest:
                 if not ev.simultaneous_with_next:
@@ -763,8 +767,8 @@ class WavRenderer:
                         inst_index=0, freq=0.0, duration_s=rest_gap, is_rest=True,
                     ))
 
-            control_evs = [ev for ev in group if ev.is_volume_change]
-            note_evs = [ev for ev in group if not ev.is_volume_change]
+            control_evs = [ev for ev in group if ev.is_volume_change or ev.is_fade]
+            note_evs = [ev for ev in group if not ev.is_volume_change and not ev.is_fade]
 
             for cev in control_evs:
                 self._events.append(cev)
@@ -783,6 +787,10 @@ class WavRenderer:
                     duration_s=ev.duration_s,
                     is_rest=False,
                     simultaneous_with_next=not is_last,
+                    velocity=ev.velocity,
+                    reverb_override=ev.reverb_override,
+                    delay_time_override=ev.delay_time_override,
+                    delay_feedback_override=ev.delay_feedback_override,
                     advance_s=beat_gap if is_last else None,
                 ))
 
@@ -857,9 +865,6 @@ class WavRenderer:
 
         # Glide state: prev freq per instrument channel
         glide_prev_freq: dict[int, float] = {}
-
-        # Karplus-Strong state per instrument (for PLUCK waveform)
-        ks_engines: dict[int, KarplusStrong] = {}
 
         # Chorus buffers per instrument (short modulated delay)
         _CHORUS_BASE_MS = 20
@@ -1363,6 +1368,10 @@ class WavRenderer:
                         new_sustained.append([ev, idx, ev.duration_s, advance_s, phases[m_idx], _sin_sample, m_hp_synth[m_idx]])
                     elif m_is_bell[m_idx]:
                         new_sustained.append([ev, idx, ev.duration_s, advance_s, phases[m_idx], _sin_sample, m_bell_synth[m_idx]])
+                    elif m_is_pluck[m_idx]:
+                        # Hand the Karplus-Strong engine over so the tail
+                        # keeps its pluck timbre instead of falling back to sine
+                        new_sustained.append([ev, idx, ev.duration_s, advance_s, phases[m_idx], _sin_sample, m_ks[m_idx]])
                     else:
                         osc_fn = _OSCILLATORS.get(self._instruments[idx].wave, _sin_sample)
                         new_sustained.append([ev, idx, ev.duration_s, advance_s, phases[m_idx], osc_fn, None])
